@@ -107,6 +107,53 @@ class TestMain(unittest.TestCase):
             out = self.run_main(sub)
             self.assertTrue(os.path.isfile(out))
 
+    def test_invalid_source_rejected(self):
+        # A corrupt entry.png next to main.py must fail loudly (exit 1),
+        # not be copied and fail grading later.
+        with tempfile.TemporaryDirectory() as tmp:
+            src_dir = os.path.join(tmp, "repo")
+            os.makedirs(src_dir)
+            import shutil as _shutil
+            _shutil.copy(os.path.join(REPO, "main.py"),
+                         os.path.join(src_dir, "main.py"))
+            with open(os.path.join(src_dir, "entry.png"), "wb") as fh:
+                fh.write(b"this is not a png file, just text........")
+            env = dict(os.environ)
+            env["MAKEFUN_OUTPUT_DIR"] = os.path.join(tmp, "out")
+            proc = subprocess.run(
+                [sys.executable, os.path.join(src_dir, "main.py")],
+                env=env, capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(proc.returncode, 1)
+            self.assertIn("invalid source", proc.stderr)
+            self.assertFalse(os.path.exists(
+                os.path.join(tmp, "out", "entry.png")))
+
+    def test_publish_leaves_no_temp_file(self):
+        # Atomic publish must not leave the .entry.png.tmp behind.
+        with tempfile.TemporaryDirectory() as tmp:
+            self.run_main(tmp)
+            leftovers = [n for n in os.listdir(tmp)
+                         if n.endswith(".tmp")]
+            self.assertEqual(leftovers, [])
+
+    def test_verify_copy_detects_tampering(self):
+        # verify_copy must catch a destination that differs by 1 byte.
+        sys.path.insert(0, REPO)
+        try:
+            import main as main_mod
+        finally:
+            sys.path.pop(0)
+        with tempfile.TemporaryDirectory() as tmp:
+            dst = os.path.join(tmp, "entry.png")
+            main_mod.publish(os.path.join(REPO, "entry.png"), dst)
+            self.assertIsNone(main_mod.verify_copy(
+                os.path.join(REPO, "entry.png"), dst))
+            with open(dst, "ab") as fh:
+                fh.write(b"x")
+            self.assertIsNotNone(main_mod.verify_copy(
+                os.path.join(REPO, "entry.png"), dst))
+
 
 if __name__ == "__main__":
     unittest.main()
